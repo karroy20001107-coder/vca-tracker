@@ -24,7 +24,7 @@ import time
 import urllib.request
 from datetime import datetime
 from email.message import EmailMessage
-from urllib.parse import quote, urlencode, urlparse
+from urllib.parse import quote, urlencode
 
 from playwright.sync_api import sync_playwright
 
@@ -42,8 +42,10 @@ GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "").replace(" ", "")
 def _parse_bark_key(raw):
     """BARK_KEY 可以填 key 本身，也可以直接粘贴 Bark app 里那整条链接"""
     raw = (raw or "").strip()
-    if "://" in raw:
-        raw = urlparse(raw).path.strip("/").split("/")[0]
+    # 连 "curl -X GET https://api.day.app/KEY/title/body?..." 整条贴进来也能识别
+    m = re.search(r"https?://[^/\s]+/([^/\s?#]+)", raw)
+    if m:
+        return m.group(1)
     return raw.strip("/")
 
 
