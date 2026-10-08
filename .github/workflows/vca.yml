@@ -1,0 +1,46 @@
+name: VCA restock check
+
+on:
+  schedule:
+    # 每 10 分钟一次（UTC）。避开整点，整点是 GitHub 最拥堵、最容易延迟的时候
+    - cron: "3,13,23,33,43,53 * * * *"
+  workflow_dispatch: # 允许在 Actions 页面手动点 "Run workflow" 测试
+    inputs:
+      test_email:
+        description: "只发一封测试邮件（不检查库存）"
+        type: boolean
+        default: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Playwright + Chromium
+        run: |
+          pip install playwright
+          python -m playwright install --with-deps chromium
+
+      - name: Check stock
+        env:
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          TO_EMAIL: ${{ secrets.TO_EMAIL }}
+        run: python vca_monitor.py ${{ inputs.test_email && '--test-email' || '--once' }}
+
+      # 检测失败时把页面截图存下来，方便看是不是被网站拦了
+      - name: Upload screenshot on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unknown-screenshot
+          path: vca_last_unknown.png
+          retention-days: 3
+          if-no-files-found: ignore
