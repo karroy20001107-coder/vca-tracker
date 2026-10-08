@@ -2,13 +2,13 @@
 """
 Van Cleef & Arpels 补货监控
 每 ~10 分钟用真实浏览器打开商品页面，检测 "ADD TO BAG" 按钮是否真正显示出来；
-一旦出现，发 email 提醒。
+一旦出现，发 email 提醒，并通过 Bark app 让 iPhone 响警报（静音/睡眠模式也会响）。
 
 注意：这个页面的 HTML 里本来就同时包含 "ADD TO BAG" 和 "ORDER BY PHONE"，
 是 JS 加载库存后才决定显示哪一个。所以不能简单搜索文字，必须检查按钮是否"可见"。
 
 用法:
-  python vca_monitor.py --test-email   # 先测试邮件能不能发出去
+  python vca_monitor.py --test-email   # 测试提醒：发测试邮件 + 手机测试警报
   python vca_monitor.py --once         # 只检查一次，确认检测结果是 OUT_OF_STOCK
   python vca_monitor.py                # 正式开始循环监控
 """
@@ -21,8 +21,10 @@ import smtplib
 import ssl
 import sys
 import time
+import urllib.request
 from datetime import datetime
 from email.message import EmailMessage
+from urllib.parse import quote, urlencode, urlparse
 
 from playwright.sync_api import sync_playwright
 
@@ -35,6 +37,17 @@ PRODUCT_NAME = "Vintage Alhambra bracelet, 5 motifs – 18K yellow gold, Tiger E
 TO_EMAIL = os.environ.get("TO_EMAIL") or os.environ.get("GMAIL_USER", "")
 GMAIL_USER = os.environ.get("GMAIL_USER", "")
 GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "").replace(" ", "")
+
+
+def _parse_bark_key(raw):
+    """BARK_KEY 可以填 key 本身，也可以直接粘贴 Bark app 里那整条链接"""
+    raw = (raw or "").strip()
+    if "://" in raw:
+        raw = urlparse(raw).path.strip("/").split("/")[0]
+    return raw.strip("/")
+
+
+BARK_KEY = _parse_bark_key(os.environ.get("BARK_KEY"))
 
 CHECK_INTERVAL_MIN = 10
 JITTER_SEC = 45            # 每次间隔随机 ±45 秒，不要太机械
@@ -132,18 +145,43 @@ def send_email(subject, body, screenshot=None):
         return False
 
 
+def send_bark(title, body):
+    """通过 Bark 给 iPhone 推送"重要警告"：无视静音和专注/睡眠模式，铃声连响 30 秒"""
+    if not BARK_KEY:
+        log("（没有设置 BARK_KEY，跳过手机警报）")
+        return False
+    params = urlencode({
+        "level": "critical",   # 重要警告：静音、勿扰、睡眠模式下也会响
+        "volume": "10",        # 重要警告的音量（0-10）
+        "call": "1",           # 铃声重复播放 30 秒
+        "url": PRODUCT_URL,    # 点通知直接打开商品页
+        "group": "VCA",
+    })
+    url = f"https://api.day.app/{BARK_KEY}/{quote(title, safe='')}/{quote(body, safe='')}?{params}"
+    try:
+        with urllib.request.urlopen(url, timeout=15) as r:
+            ok = 200 <= r.status < 300
+        log("📱 手机警报已发送" if ok else f"❌ 手机警报发送失败：HTTP {r.status}")
+        return ok
+    except Exception as e:
+        log(f"❌ 手机警报发送失败：{e}")
+        return False
+
+
 def main():
     parser = argparse.ArgumentParser(description="Van Cleef & Arpels restock monitor")
     parser.add_argument("--once", action="store_true", help="只检查一次就退出")
-    parser.add_argument("--test-email", action="store_true", help="发一封测试邮件")
+    parser.add_argument("--test-email", action="store_true",
+                        help="发测试提醒（测试邮件 + 手机测试警报）")
     args = parser.parse_args()
 
     if args.test_email:
-        ok = send_email(
+        email_ok = send_email(
             "✅ VCA 监控测试邮件",
             f"收到这封邮件说明邮件设置没问题。\n\n监控商品：{PRODUCT_NAME}\n{PRODUCT_URL}",
         )
-        sys.exit(0 if ok else 1)
+        bark_ok = send_bark("✅ VCA 监控测试警报", "手机响了就说明警报设置成功") if BARK_KEY else True
+        sys.exit(0 if (email_ok and bark_ok) else 1)
 
     log(f"开始监控：{PRODUCT_NAME}")
     last_known = None   # 上一次确定的状态（IN_STOCK / OUT_OF_STOCK）
@@ -160,7 +198,9 @@ def main():
         log(f"状态：{status}")
 
         # 从"没货"变成"有货"时发一次提醒（不会每 10 分钟重复轰炸）
+        # （GitHub Actions 每次都是全新环境，所以有货期间每次运行都会提醒）
         if status == IN_STOCK and last_known != IN_STOCK:
+            send_bark("🍀 VCA 有货了！", "Vintage Alhambra 手链出现 Add to Bag，点这里马上去买")
             send_email(
                 "🍀 VCA 有货了！Vintage Alhambra bracelet 可以 Add to Bag",
                 f"{PRODUCT_NAME}\n\n页面上出现了 ADD TO BAG 按钮，快去下单：\n{PRODUCT_URL}\n\n"

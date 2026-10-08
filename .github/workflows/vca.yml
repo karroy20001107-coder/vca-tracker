@@ -7,7 +7,7 @@ on:
   workflow_dispatch: # 允许在 Actions 页面手动点 "Run workflow" 测试
     inputs:
       test_email:
-        description: "只发一封测试邮件（不检查库存）"
+        description: "只发测试提醒：测试邮件 + 手机测试警报（不检查库存）"
         type: boolean
         default: false
 
@@ -33,6 +33,7 @@ jobs:
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           TO_EMAIL: ${{ secrets.TO_EMAIL }}
+          BARK_KEY: ${{ secrets.BARK_KEY }}
         run: python vca_monitor.py ${{ inputs.test_email && '--test-email' || '--once' }}
 
       # 检测失败时把页面截图存下来，方便看是不是被网站拦了
